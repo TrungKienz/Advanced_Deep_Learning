@@ -1,0 +1,13 @@
+# Data Manipulation & Array Processing
+pandas>=2.0.0
+numpy>=1.24.3
+
+# Machine Learning & Metrics
+scikit-learn>=1.2.2
+
+# Deep Learning Framework
+tensorflow>=2.13.0
+
+# Data Visualization
+matplotlib>=3.7.1
+seaborn>=0.12.2
