@@ -2,9 +2,9 @@ import pandas as pd
 import numpy as np
 from datasets import Dataset, DatasetDict
 from transformers import (
-    AutoTokenizer, 
-    AutoModelForSequenceClassification, 
-    TrainingArguments, 
+    AutoTokenizer,
+    AutoModelForSequenceClassification,
+    TrainingArguments,
     Trainer,
     DataCollatorWithPadding
 )
@@ -15,6 +15,7 @@ import os
 import sys
 import json
 from datetime import datetime
+import matplotlib.pyplot as plt
 
 # Select device (GPU if available, otherwise CPU)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -31,6 +32,7 @@ AVAILABLE_MODELS = [
 
 # Default model
 DEFAULT_MODEL = "bert-base-uncased"
+
 
 def load_and_prepare_dataset(sample_size=None):
     # Load IMDB dataset and split into train/val/test.
@@ -49,8 +51,10 @@ def load_and_prepare_dataset(sample_size=None):
         print(f"Using subset of {sample_size} samples")
 
     # Split dataset: train (81%), validation (9%), test (10%)
-    train_df, test_df = train_test_split(df, test_size=0.1, random_state=42, stratify=df['label'])
-    train_df, val_df = train_test_split(train_df, test_size=0.1, random_state=42, stratify=train_df['label'])
+    train_df, test_df = train_test_split(
+        df, test_size=0.1, random_state=42, stratify=df['label'])
+    train_df, val_df = train_test_split(
+        train_df, test_size=0.1, random_state=42, stratify=train_df['label'])
 
     print(f"Train set size: {len(train_df)}")
     print(f"Validation set size: {len(val_df)}")
@@ -98,28 +102,106 @@ def get_compute_metrics():
     # Define evaluation metrics: Accuracy and Weighted F1-score
     metric = evaluate.load("accuracy")
     f1_metric = evaluate.load("f1")
+    precision_metric = evaluate.load("precision")
+    recall_metric = evaluate.load("recall")
 
     def compute_metrics(eval_pred):
         predictions, labels = eval_pred
         predictions = np.argmax(predictions, axis=1)
+
         accuracy = metric.compute(predictions=predictions, references=labels)
-        f1 = f1_metric.compute(predictions=predictions, references=labels, average='weighted')
+        f1 = f1_metric.compute(predictions=predictions,
+                               references=labels, average='weighted')
+        precision = precision_metric.compute(
+            predictions=predictions, references=labels, average='weighted')
+        recall = recall_metric.compute(
+            predictions=predictions, references=labels, average='weighted')
+
         return {
             'accuracy': accuracy['accuracy'],
-            'f1': f1['f1']
+            'f1': f1['f1'],
+            'precision': precision['precision'],
+            'recall': recall['recall']
         }
 
     return compute_metrics
 
+# For visualization of training history
+
+
+def plot_training_history(trainer, output_dir):
+    log_history = trainer.state.log_history
+
+    train_loss = []
+    eval_loss = []
+    eval_accuracy = []
+    eval_f1 = []
+    steps = []
+
+    for log in log_history:
+        if 'loss' in log and 'epoch' in log:
+            train_loss.append(log['loss'])
+            steps.append(log['epoch'])
+
+        if 'eval_loss' in log:
+            eval_loss.append(log['eval_loss'])
+
+        if 'eval_accuracy' in log:
+            eval_accuracy.append(log['eval_accuracy'])
+
+        if 'eval_f1' in log:
+            eval_f1.append(log['eval_f1'])
+
+    # Plot Training Loss
+    plt.figure()
+    plt.plot(steps[:len(train_loss)], train_loss)
+    plt.xlabel("Epoch")
+    plt.ylabel("Loss")
+    plt.title("Training Loss")
+    plt.savefig(f"{output_dir}/training_loss.png")
+    plt.close()
+
+    # Plot Eval Loss
+    if eval_loss:
+        plt.figure()
+        plt.plot(range(1, len(eval_loss)+1), eval_loss)
+        plt.xlabel("Epoch")
+        plt.ylabel("Loss")
+        plt.title("Validation Loss")
+        plt.savefig(f"{output_dir}/eval_loss.png")
+        plt.close()
+
+    # Plot Accuracy
+    if eval_accuracy:
+        plt.figure()
+        plt.plot(range(1, len(eval_accuracy)+1), eval_accuracy)
+        plt.xlabel("Epoch")
+        plt.ylabel("Accuracy")
+        plt.title("Validation Accuracy")
+        plt.savefig(f"{output_dir}/accuracy.png")
+        plt.close()
+
+    # Plot F1 Score
+    if eval_f1:
+        plt.figure()
+        plt.plot(range(1, len(eval_f1)+1), eval_f1)
+        plt.xlabel("Epoch")
+        plt.ylabel("F1 Score")
+        plt.title("Validation F1 Score")
+        plt.savefig(f"{output_dir}/f1_score.png")
+        plt.close()
+
+    print(f"Training graphs saved to {output_dir}")
+
 
 # Main Training Function
-def train_sentiment_model(model_name, dataset, tokenized_dataset, num_epochs=3, 
-                         batch_size=16, learning_rate=2e-5, sample_size=None):
+def train_sentiment_model(model_name, dataset, tokenized_dataset, num_epochs=3,
+                          batch_size=16, learning_rate=2e-5, sample_size=None):
     # Train a transformer model for sentiment analysis, evaluate it, and save results.
     print(f"\n{'='*80}")
     print(f"Training {model_name.upper()} on IMDB Sentiment Analysis")
     print(f"{'='*80}\n")
-    
+
     # Create output directory for this model
     safe_model_name = model_name.replace('/', '-')
     output_dir = f'./sentiment-models/{safe_model_name}'
@@ -128,7 +210,8 @@ def train_sentiment_model(model_name, dataset, tokenized_dataset, num_epochs=3,
     # Load tokenizer and model
     print(f"3. Loading {model_name} tokenizer and model...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, num_labels=2)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name, num_labels=2)
     model.to(device)
     print(f"Model loaded with {model.num_parameters():,} parameters")
 
@@ -165,6 +248,9 @@ def train_sentiment_model(model_name, dataset, tokenized_dataset, num_epochs=3,
     print("\n6. Starting training...")
     train_result = trainer.train()
 
+    # Save training logs and plots
+    plot_training_history(trainer, output_dir)
+
     # Evaluate on Test Set
     print("\n7. Evaluating on test set...")
     test_results = trainer.evaluate(tokenized_dataset['test'])
@@ -194,12 +280,13 @@ def train_sentiment_model(model_name, dataset, tokenized_dataset, num_epochs=3,
 
     # Test on Sample Reviews
     print("\n9. Testing on sample reviews...")
-    modelfor_inference = AutoModelForSequenceClassification.from_pretrained(model_save_path).to(device)
+    modelfor_inference = AutoModelForSequenceClassification.from_pretrained(
+        model_save_path).to(device)
     tokenizer_for_inference = AutoTokenizer.from_pretrained(model_save_path)
 
     def predict_sentiment(text):
-        inputs = tokenizer_for_inference(text, return_tensors='pt', max_length=128, 
-                                        padding='max_length', truncation=True).to(device)
+        inputs = tokenizer_for_inference(text, return_tensors='pt', max_length=128,
+                                         padding='max_length', truncation=True).to(device)
         with torch.no_grad():
             outputs = modelfor_inference(**inputs)
         logits = outputs.logits
@@ -226,8 +313,10 @@ def train_sentiment_model(model_name, dataset, tokenized_dataset, num_epochs=3,
     for review in test_reviews:
         result = predict_sentiment(review)
         print(f"\nReview: {review}")
-        print(f"Prediction: {result['sentiment']} (confidence: {result['confidence']:.4f})")
-        print(f"Probabilities - Negative: {result['probabilities']['negative']:.4f}, Positive: {result['probabilities']['positive']:.4f}")
+        print(
+            f"Prediction: {result['sentiment']} (confidence: {result['confidence']:.4f})")
+        print(
+            f"Probabilities - Negative: {result['probabilities']['negative']:.4f}, Positive: {result['probabilities']['positive']:.4f}")
 
     print(f"\n✓ Training {model_name} complete!")
     print(f"Model saved to: {model_save_path}\n")
@@ -274,7 +363,6 @@ if __name__ == "__main__":
     print(f"  python main.py roberta-base")
     print(f"\nAvailable models: {', '.join(AVAILABLE_MODELS)}")
     print(f"{'='*80}\n")
-
 
     # Results Summary
     # bert-base-uncased: Accuracy: 0.9054, F1-score: 0.9054, time: ~3h20m (best trade-off baseline, stable performance)
